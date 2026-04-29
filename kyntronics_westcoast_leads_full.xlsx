@@ -1,0 +1,130 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
+import os
+
+st.set_page_config(page_title="Kyntronics West Coast CRM", layout="wide")
+st.title("🚀 Kyntronics SHA West Coast CRM")
+st.markdown("**Interactive Pipeline • 30 Pre-loaded Leads** | Data from Excel")
+
+# ====================== LOAD FROM EXCEL ======================
+EXCEL_FILE = "kyntronics_westcoast_leads_full.xlsx"
+
+if os.path.exists(EXCEL_FILE):
+    df = pd.read_excel(EXCEL_FILE)
+    st.success(f"✅ Loaded {len(df)} leads from {EXCEL_FILE}")
+else:
+    st.error("Excel file not found! Please place kyntronics_westcoast_leads_full.xlsx in this folder.")
+    st.stop()
+
+# ====================== SIDEBAR FILTERS ======================
+st.sidebar.header("🔍 Filters")
+search = st.sidebar.text_input("Search Company / Contact")
+state_filter = st.sidebar.multiselect("State", sorted(df["State"].dropna().unique()))
+stage_filter = st.sidebar.multiselect("Pipeline Stage", sorted(df["Pipeline_Stage"].unique()))
+
+filtered_df = df.copy()
+if search:
+    filtered_df = filtered_df[filtered_df.apply(lambda row: search.lower() in str(row).lower(), axis=1)]
+if state_filter:
+    filtered_df = filtered_df[filtered_df["State"].isin(state_filter)]
+if stage_filter:
+    filtered_df = filtered_df[filtered_df["Pipeline_Stage"].isin(stage_filter)]
+
+# ====================== TABS ======================
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Interactive Dashboard", "🗂️ Kanban Board", "📋 Editable Leads", "➕ Add / Export"])
+
+# ==================== TAB 1: DASHBOARD ====================
+with tab1:
+    col1, col2, col3, col4 = st.columns(4)
+    with col1: st.metric("Total Pipeline", f"${filtered_df['Est_Value'].sum():,}")
+    with col2: st.metric("Active Leads", len(filtered_df))
+    with col3: st.metric("Avg Deal Size", f"${filtered_df['Est_Value'].mean():,.0f}")
+    with col4: st.metric("Win Probability Avg", f"{filtered_df['Win_Probability'].mean():.0f}%")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        stage_summary = filtered_df.groupby("Pipeline_Stage").agg(
+            Count=("Company", "count"), Total_Value=("Est_Value", "sum")
+        ).reset_index()
+        st.plotly_chart(px.bar(stage_summary, x="Pipeline_Stage", y="Total_Value", title="Value by Stage"), use_container_width=True)
+    with c2:
+        st.plotly_chart(px.pie(stage_summary, names="Pipeline_Stage", values="Count", title="Leads by Stage"), use_container_width=True)
+
+    # Funnel
+    stages_order = ["Prospect", "Needs Demo", "Quote Sent", "Negotiation", "Closed-Won", "Lost"]
+    funnel_data = filtered_df.groupby("Pipeline_Stage")["Est_Value"].sum().reindex(stages_order).reset_index()
+    st.plotly_chart(px.funnel(funnel_data, x="Est_Value", y="Pipeline_Stage", title="Sales Funnel"), use_container_width=True)
+
+# ==================== TAB 2: KANBAN ====================
+with tab2:
+    st.subheader("Kanban Pipeline")
+    stages = ["Prospect", "Needs Demo", "Quote Sent", "Negotiation", "Closed-Won", "Lost"]
+    cols = st.columns(len(stages))
+    for idx, stage in enumerate(stages):
+        with cols[idx]:
+            st.markdown(f"**{stage}** ({len(filtered_df[filtered_df['Pipeline_Stage']==stage])})")
+            stage_leads = filtered_df[filtered_df["Pipeline_Stage"] == stage]
+            for _, row in stage_leads.iterrows():
+                with st.expander(f"{row['Company']} (${row['Est_Value']:,.0f})"):
+                    st.write(f"**{row['Contact']}** | {row['State']}")
+                    st.write(row['Application'])
+                    if st.button("Move Lead", key=f"move_{row['Company']}_{stage}"):
+                        new_stage = st.selectbox("To Stage", [s for s in stages if s != stage], key=f"sel_{row['Company']}")
+                        if st.button("Confirm Move", key=f"conf_{row['Company']}"):
+                            df.loc[df["Company"] == row["Company"], "Pipeline_Stage"] = new_stage
+                            df.loc[df["Company"] == row["Company"], "Last_Contact"] = datetime.now().strftime("%Y-%m-%d")
+                            df.to_excel(EXCEL_FILE, index=False)
+                            st.rerun()
+
+# ==================== TAB 3: EDITABLE TABLE ====================
+with tab3:
+    st.subheader("Edit Leads Directly")
+    edited_df = st.data_editor(
+        filtered_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Pipeline_Stage": st.column_config.SelectboxColumn("Stage", options=stages),
+            "Est_Value": st.column_config.NumberColumn("Est. Value $"),
+            "Win_Probability": st.column_config.NumberColumn("Win %", min_value=0, max_value=100),
+            "Last_Contact": st.column_config.DateColumn()
+        }
+    )
+    if st.button("💾 Save All Changes to Excel"):
+        df.update(edited_df)
+        df.to_excel(EXCEL_FILE, index=False)
+        st.success("✅ Saved to kyntronics_westcoast_leads_full.xlsx")
+
+# ==================== TAB 4: ADD & EXPORT ====================
+with tab4:
+    with st.form("add_form"):
+        st.subheader("Add New Lead")
+        c1, c2 = st.columns(2)
+        with c1:
+            company = st.text_input("Company *")
+            contact = st.text_input("Contact")
+            email = st.text_input("Email")
+            phone = st.text_input("Phone")
+        with c2:
+            state = st.selectbox("State", ["CA","WA","OR","AZ","UT","NV","ID","CO"])
+            industry = st.text_input("Industry")
+            application = st.text_input("Application")
+            value = st.number_input("Est. Value $", value=40000)
+            stage = st.selectbox("Pipeline Stage", stages)
+        if st.form_submit_button("Add Lead"):
+            new_row = pd.DataFrame([{
+                "Company": company, "Contact": contact, "Email": email, "Phone": phone,
+                "State": state, "Industry": industry, "Application": application,
+                "Pipeline_Stage": stage, "Est_Value": value, "Last_Contact": datetime.now().strftime("%Y-%m-%d"),
+                "Notes": "", "Decision_Maker_Title": "", "Source": "Manual", "Next_Action": "Call",
+                "Win_Probability": 25
+            }])
+            df = pd.concat([df, new_row], ignore_index=True)
+            df.to_excel(EXCEL_FILE, index=False)
+            st.success("Lead added & saved!")
+
+    st.download_button("📥 Download Full Excel", data=open(EXCEL_FILE, "rb").read(), file_name="kyntronics_westcoast_leads_full.xlsx")
+
+st.caption("Kyntronics West Coast CRM • Data persists in Excel • Ready for real sales calls")
